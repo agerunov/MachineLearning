@@ -1,0 +1,210 @@
+#  Weight Lifting Exercise Dataset Analysis
+
+### Synopsis
+
+It this analysis we attempt to build a classification model which can discern whether a given physical activity is performed as it should be, or not. We use data from the Weight Lifting Exercise Dataset and train three different models on it - Random Forest, Stochastic Gradient Boosting, and Naive Bayes. During the cross-validation phase we select the best performer, which turns out to be Random Forest, and then apply it to a concrete classification problem. Random Forest Accuracy was 99% during training and validation but dropped to 95% during the testing phase.
+
+### Introduction
+
+In this analysis we will be using the Weight Lifting Exercise Dataset (Velloso et al., 2013) to train and test a classification machine learning algorithm. This dataset contains data on 6 young healthy participants who were asked to do the Unilateral Dumbbell Biceps Curl in sets of 10 repetitions either correctly or to replicate common mistakes. Whether they did it correctly or mistakenly is encoded in the **classe** variable with five levels - exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). We are going to use activity variables to try to predict what class a given observation will fall into.
+
+### Data Processing
+
+We begin by downloading the testing data using the **download.file** command: `download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "train.csv")`, and then also download the testing data: `download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "test.csv")`.
+
+Data is read into R with the standard **read.csv** command. 
+
+```{r}
+pml <- read.csv("train.csv")
+test <- read.csv("test.csv")
+```
+
+First, we look into the data summary. It contains 19,622 observations of 163 different variables.
+
+```{r}
+dim(pml)
+summary(pml)
+```
+
+We notice immediately that a lot of variables have an extremely large proportion of missing values. What needs to be noted here is that the pattern of missing values in the training and validation data, and the pattern in testing data do not match. To maintain consistency between the two data sets we elect to do limited pre-processing and then utilize a non-linear classification algorithm for which this is less important. In addition, there is a problem of very strange variable classes - there are logicals, integers, and factors, whereas all measurements and their summaries need to be numeric. We correct for that.
+
+```{r}
+pml[, 7:159] <- sapply(pml[, 7:159], as.numeric)
+test[, 7:159] <- sapply(test[, 7:159], as.numeric)
+```
+
+In order to perform the classification task we look what variables have values in the test data and subset the training and validation data according to those. This will ensure that our classification algorithm is not built on variables that we cannot, in fact, use for the classification task at hand.
+
+```{r}
+isna <- sapply(test, is.na)
+available <- colSums(isna) != 20
+pml <- pml[, available]
+test <- test[, available]
+```
+
+This operation dramatically reduces the dimensions of data sets, leaving us 60 variable in total, or 59 variables to build the algorithm on. Since the first seven are identification variables, those will be removed as well, remaining with a total of 52 variables to be used for classification.
+
+```{r}
+dim(pml)
+dim(test)
+```
+
+To be able to perform cross validation, we separate the initial training data into a training set **train** and a validation set **val**, using the **createDataPartition** function from the **caret** package. Their relative proportion is 70% to 30%, respectively. In short, we train the model on 13,737 cases and retain an additional 5,885 cases for cross-validation.
+
+```{r}
+library(caret)
+inTrain <- createDataPartition(y=pml$classe, p=0.7, list=FALSE)
+train <- pml[inTrain,]
+val <- pml[-inTrain,]
+```
+
+It is interesting to see how the covariates are associated with our outcome of interest - **classe** or how the activity was performed. Since activity classification is a categorical variable, it is inappropriate to use the standard Pearson correlation and we therefore resort the the Spearman method. We create a loop which calculates the Spearman correlations between every covariate and the classification variable and store it in the vector **corr**. 
+
+```{r}
+library(Hmisc)
+corr <- vector()
+
+for (i in 1:58) { 
+    
+    cori <- rcorr(train[, i+2], train$classe, type="spearman")               
+    corr[i] <- cori[[1]][1,2]               
+}
+corr <- corr[1:57]
+```
+
+We then plot those correlations and color them according to absolute value, with lighter ones being higher in value.
+
+```{r}
+library(ggplot2)
+qplot(3:59, corr, color=abs(corr), main="Rank Correlations Between Covariates and Activity Class", xlab="Variable Index", ylab="Correlations")
+```
+
+The overall conclusion is that correlation are small to medium size, with most covariates being only weakly correlated to the outcome. There seems to be no visible clustering according to variable types (or indexing). Such a complicated dataset will likely be difficult to analyze using simple linear models and therefore the algorithms of choice will tend to more sophisticated.
+
+### Algorithm Building
+
+We will fit three different algorithms and inspect their performance. For the purposes of this classification algorithm we will drop identification variables and focus on those variables giving concrete numeric information that are present in both training, validation and testing data sets.
+
+```{r}
+train1 <- train[, 8:60]
+dim(train1)
+```
+
+Since all three algorithms are very computationally intensive we will also measure the amount of time that they needed for training on the data, using the **proc.time** function. The computer used for training is an x64 Intel machine i5-3317U @ 1.7 GHz with 4 GB RAM under Windows 8.1 with 64-bit R version 3.1.1.
+
+#### Random Forest
+
+The first algorithm of choice - **mod1** - is the Random Forest, which we fit passing the method as *rf* in the **train** command. The Random Forest model is presented below.
+
+```{r, eval=FALSE}
+ptm <- proc.time(); print(Sys.time()); mod1 <- train(classe~., data=train, method="rf"); ptm1 <- proc.time() - ptm
+```
+
+```{r}
+mod1
+print(ptm1)
+```
+
+The achieved in-sample accuracy rate stands at 98.8% with standard deviation of 0.2%. The overwhelming majority of cases was correctly classified by Random Forest. In terms of performance the algorithm was trained for a bit over one and a half hour.
+
+#### Boosting Algorithm
+
+The second algorithm in **mod2** is a boosting algorithm, which we fit passing the method **gbm** in the **train** command. The following model is obtained:
+
+```{r, eval=FALSE}
+ptm <- proc.time(); print(Sys.time()); mod2 <- train(classe~., data=train, method="gbm", verbose=FALSE); ptm2 <- proc.time() - ptm
+```
+
+```{r}
+mod2
+print(ptm2)
+```
+
+The boosting algorithm also performs very well in terms of accuracy, with 95.6% with a standard deviation of 0.4%. It was calculated for less than forty minutes. While the accuracy was somewhat lower, the Stochastic Gradient Boosting algorithm was more than twice faster than the Random Forest as implemented in the **caret** package. Additional experimentation with the **randomForest** package shows that this implementation of the Random Forest is approximately on par with the boosting in terms of training time.
+
+#### Naive Bayes Classification
+
+The third algorithm we will try is the Naive Bayes classification, which is less sophisticated than the first two but will provide an interesting comparison to model-based classification as opposed the other two. Our expectations is that results from the Naive Bayes classifier will be much less accurate due to the inherent non-linearity of the observed variables and their interrelations. We fir **mod3** by passing the method **nb** to the **train** command.
+
+The model we obtained is as follows.
+
+```{r, eval=FALSE}
+ptm <- proc.time(); print(Sys.time()); mod3 <- train(classe~., data=train, method="nb"); ptm3 <- proc.time() - ptm
+```
+
+```{r}
+mod3
+print(ptm3)
+```
+
+The Naive Bayes classification is performing notably less well. Its accuracy stands at 73.8% with a standard deviation of 0.87%. Its calculation time was a bit less than one hour, making it more time consuming than the boosting algorithm but less accurate.
+
+### Cross-Validation and Out-of-sample Errors
+
+All three algorithms do a reasonably good job at classification problems so we will select the one to be used during the cross-validation phase. We expect larger out-of-sample errors than we currently observe in-sample. Judging from accuracy rates, kappa values and standard deviations, Random Forest and Stochastic Gradient Boosting will likely maintain very good classification accuracy, with an error rate of no more than 2-3% higher than what we observe in the testing data. This will make for at least 93-95% correct classification out-of-sample. The Naive Bayes, on the other hand has relatively lower in-sample accuracy and we therefore we expect low out-of-sample accuracy as well, with misclassification possibly going to up to 30%.
+
+We fit all three models to the validation data.
+
+```{r, warning=FALSE, eval=FALSE}
+pred1 <- predict(mod1, val)
+pred2 <- predict(mod2, val)
+pred3 <- predict(mod3, val)
+```
+
+Looking at the confusion matrix of the Random Forest we observe very good out-of-sample performance. 
+
+```{r}
+confusionMatrix(pred1, val$classe)
+```
+
+The accuracy is very high at 99.2% with very few of the cases being misclassified. Mostly problematic were 29 true **C** cases which were misclassified but this is still a very small proportion. The error rate is less than 1% misclassification.
+
+We now look to the confusion matrix of the Stochastic Gradient Boosting algorithm.
+
+```{r}
+confusionMatrix(pred2, val$classe)
+```
+
+Accuracy is still very high with 95.8% of all cases classified correctly but somewhat below the performance of the Random Forest. Misclassification therefore stands at 4.2%.
+
+Finally we inspect the Naive Bayesian classifier.
+
+```{r}
+confusionMatrix(pred3, val$classe)
+```
+
+The accuracy has changed very little - it now stands at 74.2%, thus a bit more than a quarter of the cases are misclassified.
+
+### Results and Discussion
+
+We plot the accuracy rates of all three models across the training and validation data sets.
+
+```{r}
+library(ggplot2)
+Model <- rep(c("Random Forest", "Boosting", "Naive Bayes"), times=2)
+Accuracy <- as.numeric(c("98.8", "95.6", "73.8", "99.2", "95.8", "74.2"))
+Type <- c("Training", "Training", "Training", "Validation", "Validation", "Validation")
+summary <- as.data.frame(cbind(Model, Accuracy, Type))
+qplot(Type, Accuracy, color=Model, data=summary, main="Random Forest Outperforms in Terms of Accuracy")  + geom_point(size=3)
+```
+
+It seems that across both settings, the Random Forest outperforms its competitors, and will therefore be the algorithm of choice for the classification problems. It is interesting to note that all three algorithms seem to perform slightly better in the validation phase. This difference is however not particularly pronounced and when we look at the validation accuracy standard deviations, it turns out that the training accuracy numbers are within the bounds of one SD. The reason we achieve such comparable numbers between the two data sets is that the data structure between those is very, very similar. If completely new data is put to test, the accuracy will likely be notably lower.
+
+At any rate, we expect the Random Forest to remain in the lead and will retain it as a classifier of choice. We can see how close results are by plotting the RF predictions and the actual data from the validation set.
+
+```{r}
+library(ggplot2)
+qplot(pred1, val$classe, color=classe, data=val, xlab="Random Forest Predictions", ylab="True Classification", main="Random Forest Closely Parallels True Values") + geom_point(size=3)
+```
+
+We now apply the Random Forest to the test data set.
+
+```{r, eval=FALSE}
+answers <- predict(mod1, test)
+```
+
+The performance is still very good - 19 out of 20 cases are correctly classified, thus yielding a 95% accuracy. This value closely mirrors what we have observed in the training and validation cases and we can conclude that we have built a robust and adequate classification algorithm.
+
+### Conclusion
+
+The current analysis has focused on building a suitable machine learning algorithm for classification purposes. After training three models, we have selected the highest performer during the validation phase and applied it to a concrete classification problem with very good results.
